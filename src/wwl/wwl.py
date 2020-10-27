@@ -160,4 +160,4 @@ class PairwiseWWL():
 
     @property
     def shape(self):
-        return (self.node_representations.shape[0], self.node_representations.shape[0])
+        return (len(self.node_representations), len(self.node_representations))
