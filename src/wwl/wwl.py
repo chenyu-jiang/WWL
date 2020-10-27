@@ -90,7 +90,74 @@ def wwl(X, node_features=None, num_iterations=3, sinkhorn=False, gamma=None):
     wwl = laplacian_kernel(D_W, gamma=gamma)
     return wwl
 
-
 #######################
 # Class implementation
 #######################
+
+class PairwiseWWL():
+    def __init__(self, X, node_features=None, enforce_continuous=False, num_iterations=3, sinkhorn=False):
+        self.num_iterations = num_iterations
+        self.sinkhorn = sinkhorn
+        self.enforce_continuous = enforce_continuous
+        self.node_features = node_features
+        self.X = X
+        self._distance_cache = {}
+        self._compute_node_representation()
+
+    def _compute_node_representation(self):
+        # First check if the graphs are continuous vs categorical
+        self.categorical = True
+        if self.enforce_continuous:
+            print('Enforce continous flag is on, using CONTINUOUS propagation scheme.')
+            self.categorical = False
+        elif self.node_features is not None:
+            print('Continuous node features provided, using CONTINUOUS propagation scheme.')
+            self.categorical = False
+        else:
+            for g in self.X:
+                if not 'label' in g.vs.attribute_names():
+                    print('No label attributed to graphs, use degree instead and use CONTINUOUS propagation scheme.')
+                    self.categorical = False
+                    break
+            if self.categorical:
+                print('Categorically-labelled graphs, using CATEGORICAL propagation scheme.')
+        
+        # Embed the nodes
+        if self.categorical:
+            es = WeisfeilerLehman()
+            node_representations = es.fit_transform(self.X, num_iterations=self.num_iterations)
+        else:
+            es = ContinuousWeisfeilerLehman()
+            node_representations = es.fit_transform(self.X, node_features=self.node_features, num_iterations=self.num_iterations)
+        self.node_representations = node_representations
+
+    def wwl_distance(self, idx_1, idx_2, sinkhorn_lambda=1e-2):
+        # make idx_1 <= idx_2
+        if idx_1 > idx_2:
+            idx_1, idx_2 = idx_2, idx_1
+        if (idx_1, idx_2) in self._distance_cache:
+            return self._distance_cache[(idx_1, idx_2)]
+
+        labels_1 = self.node_representations[idx_1]
+        labels_2 = self.node_representations[idx_2]
+        # Get cost matrix
+        ground_distance = 'hamming' if self.categorical else 'euclidean'
+        costs = ot.dist(labels_1, labels_2, metric=ground_distance)
+
+        if self.sinkhorn:
+            mat = ot.sinkhorn(np.ones(len(labels_1))/len(labels_1), 
+                                np.ones(len(labels_2))/len(labels_2), costs, sinkhorn_lambda, 
+                                numItermax=50)
+            distance = np.sum(np.multiply(mat, costs))
+        else:
+            distance = ot.emd2([], [], costs)
+        self._distance_cache[(idx_1, idx_2)] = distance
+        return distance
+    
+    def __getitem__(self, indices):
+        idx_1, idx_2 = indices
+        return self.wwl_distance(idx_1, idx_2)
+
+    @property
+    def shape(self):
+        return (self.node_representations.shape[0], self.node_representations.shape[0])
