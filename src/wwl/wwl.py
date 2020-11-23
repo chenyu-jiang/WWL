@@ -4,7 +4,7 @@
 # December 2019, M. Togninalli
 # -----------------------------------------------------------------------------
 from .propagation_scheme import WeisfeilerLehman, ContinuousWeisfeilerLehman
-from sklearn.metrics.pairwise import laplacian_kernel
+from sklearn.metrics.pairwise import laplacian_kernel, cosine_similarity
 import ot
 import numpy as np
 
@@ -146,7 +146,7 @@ class PairwiseWWL():
 
         if self.sinkhorn:
             mat = ot.sinkhorn(np.ones(len(labels_1))/len(labels_1), 
-                                np.ones(len(labels_2))/len(labels_2), costs, sinkhorn_lambda, 
+                                np.ones(len(labels_2))/len(labels_2), costs + 1e-6, sinkhorn_lambda, 
                                 numItermax=50)
             distance = np.sum(np.multiply(mat, costs))
         else:
@@ -161,3 +161,24 @@ class PairwiseWWL():
     @property
     def shape(self):
         return (len(self.node_representations), len(self.node_representations))
+
+class PairwiseOverlap(PairwiseWWL):
+    def overlap_distance(self, idx_1, idx_2):
+        # make idx_1 <= idx_2
+        if idx_1 > idx_2:
+            idx_1, idx_2 = idx_2, idx_1
+        if (idx_1, idx_2) in self._distance_cache:
+            return self._distance_cache[(idx_1, idx_2)]
+        
+        labels_1 = self.node_representations[idx_1]
+        labels_2 = self.node_representations[idx_2]
+        (smaller_label, smaller_max_axis) = (labels_1, 1) if len(labels_1) <= len(labels_2) else (labels_2, 0)
+        
+        similarity = cosine_similarity(labels_1, labels_2)
+        distance = 1 - np.sum(np.max(similarity, axis=smaller_max_axis)) / len(smaller_label)
+        self._distance_cache[(idx_1, idx_2)] = distance
+        return distance
+    
+    def __getitem__(self, indices):
+        idx_1, idx_2 = indices
+        return self.overlap_distance(idx_1, idx_2)
